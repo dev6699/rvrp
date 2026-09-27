@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#08090d" />
+    <title>RVRP — VR Video Player</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="RVRP home"
+          ><span class="brand-mark">◉</span><span>RVRP</span></a
+        >
+        <div class="topbar-right">
+          <span class="library-count" id="library-count">Loading library</span
+          ><button
+            class="icon-button"
+            id="refresh-button"
+            title="Refresh library"
+            aria-label="Refresh library"
+          >
+            ↻
+          </button>
+        </div>
+      </header>
+
+      <div class="home-toolbar">
+        <div class="compatibility" id="xr-status">Checking WebXR support…</div>
+      </div>
+
+      <section class="library-section">
+        <div class="section-heading">
+          <h2>Video library</h2>
+          <div class="search-wrap">
+            <span>⌕</span
+            ><input id="search" type="search" placeholder="Find a video" autocomplete="off" />
+          </div>
+        </div>
+        <div class="message hidden" id="message"></div>
+        <div class="video-grid" id="video-grid" aria-live="polite"></div>
+        <div class="empty-state hidden" id="empty-state">
+          <h3>No videos found</h3>
+          <p>Add MP4 videos to the <code>videos/</code> folder, then refresh the library.</p>
+        </div>
+      </section>
+      <footer><span>RVRP PLAYER</span><span>WebXR video player</span></footer>
+    </main>
+
+    <section class="player hidden" id="player" aria-label="Video player">
+      <div class="player-top">
+        <button class="icon-button back-button" id="back-button" aria-label="Back to library">
+          ←
+        </button>
+        <div class="now-playing">
+          <span class="live-dot"></span><span id="now-title">Now playing</span>
+        </div>
+        <button class="vr-return" id="player-enter-vr">Enter VR</button
+        ><button class="debug-toggle" id="debug-toggle" aria-pressed="false">Stats</button
+        ><button
+          class="icon-button fullscreen-button"
+          id="fullscreen-button"
+          aria-label="Enter fullscreen"
+          title="Fullscreen"
+        >
+          ⛶</button
+        ><button class="icon-button" id="close-player" aria-label="Close player">×</button>
+      </div>
+      <div class="render-area" id="render-area">
+        <div class="screen-hint" id="screen-hint">Select a video from your library to begin.</div>
+      </div>
+      <pre class="debug-overlay hidden" id="debug-overlay" aria-live="polite"></pre>
+      <aside class="player-panel" id="player-panel">
+        <div class="panel-top">
+          <div>
+            <div class="eyebrow">NOW PLAYING</div>
+            <h2 id="panel-title">—</h2>
+          </div>
+          <button class="icon-button panel-close" id="panel-hide" aria-label="Hide controls">
+            ×
+          </button>
+        </div>
+        <div class="layout-controls">
+          <label
+            >VIEWING MODE<select id="projection">
+              <option value="flat">Flat screen · 2D</option>
+              <option value="cinema">Cinema · 2D</option>
+              <option value="180" selected>180° immersive</option>
+              <option value="360">360° immersive</option>
+            </select></label
+          >
+          <label
+            >STEREO LAYOUT<select id="stereo">
+              <option value="mono">Mono</option>
+              <option value="sbs">Side by side</option>
+              <option value="tb">Top / bottom</option>
+            </select></label
+          >
+        </div>
+        <div class="playback-controls">
+          <button id="play-pause" class="play-button" aria-label="Play or pause">▶</button
+          ><span id="elapsed">0:00</span>
+          <div class="seek-wrap">
+            <input
+              id="seek"
+              type="range"
+              min="0"
+              max="1000"
+              value="0"
+              aria-label="Seek through video"
+            />
+            <div id="seek-preview" class="seek-preview hidden">
+              <canvas id="seek-preview-frame" width="320" height="180"></canvas
+              ><span id="seek-preview-time">0:00</span>
+            </div>
+          </div>
+          <span id="duration">0:00</span
+          ><button id="mute" class="sound-button" aria-label="Mute or unmute">◖</button>
+        </div>
+        <div class="panel-note" id="panel-note"></div>
+      </aside>
+      <button class="reopen-panel hidden" id="panel-show">Show controls</button>
+      <video id="video" playsinline crossorigin="anonymous"></video>
+    </section>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
