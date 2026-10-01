@@ -20,8 +20,10 @@ const seekPreviewVideo = document.createElement('video');
 const raycaster = new THREE.Raycaster();
 const grabViewPosition = new THREE.Vector3();
 const grabViewUp = new THREE.Vector3(0, 1, 0);
+const INITIAL_SCREEN_DISTANCE = 6;
 const MIN_SCREEN_DISTANCE = 3.2;
 const MAX_SCREEN_DISTANCE = 20;
+const FLAT_SCREEN_SCALE = 5;
 const videos = [];
 const thumbnailCache = new Map();
 const thumbnailRequests = new Map();
@@ -165,7 +167,7 @@ videoMaterial.onBeforeRender = (activeRenderer, _scene, activeCamera) => {
 
 const screenGeometry = new THREE.PlaneGeometry(3.5, 1.97);
 screen = new THREE.Mesh(screenGeometry, flatVideoMaterial);
-screen.position.set(0, 1.62, -6);
+screen.position.set(0, 1.62, -INITIAL_SCREEN_DISTANCE);
 scene.add(screen);
 
 function createCinemaScreenGeometry() {
@@ -339,7 +341,7 @@ seekPreviewVideo.addEventListener('seeked', () => {
 video.addEventListener('loadedmetadata', () => {
   aspect = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
   if (projection === 'cinema') updateProjection();
-  else screen.scale.set(aspect / (16 / 9), 1, 1);
+  else updateFlatScreenScale();
   if (texture) texture.dispose();
   texture = new THREE.VideoTexture(video);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -355,7 +357,10 @@ video.addEventListener('loadedmetadata', () => {
 video.addEventListener('timeupdate', updatePlaybackUi);
 video.addEventListener('play', updatePlaybackUi);
 video.addEventListener('pause', updatePlaybackUi);
-video.addEventListener('ended', updatePlaybackUi);
+video.addEventListener('ended', () => {
+  updatePlaybackUi();
+  playNextVideo();
+});
 video.addEventListener('waiting', () => {
   debugMediaStatus = 'waiting for data';
 });
@@ -540,6 +545,12 @@ function playVideo(item) {
   drawVrPanel();
 }
 
+function playNextVideo() {
+  const index = videos.findIndex((item) => item.id === activeVideo?.id);
+  const next = index >= 0 ? videos[index + 1] : null;
+  if (next) playVideo(next);
+}
+
 function closePlayer() {
   if (renderer.xr.isPresenting) renderer.xr.getSession()?.end();
   video.pause();
@@ -676,7 +687,8 @@ function updateProjection() {
   screen.visible = !spherical;
   if (screen.geometry !== screenGeometry) screen.geometry.dispose();
   screen.geometry = cinema ? createCinemaScreenGeometry() : screenGeometry;
-  screen.scale.set(cinema ? 1 : aspect / (16 / 9), 1, 1);
+  if (cinema) screen.scale.set(1, 1, 1);
+  else updateFlatScreenScale();
   sphere.geometry.dispose();
   sphere.geometry =
     projection === '180'
@@ -685,6 +697,10 @@ function updateProjection() {
   sphere.geometry.scale(-1, 1, 1);
   sphere.position.set(0, 1.62, 0);
   drawVrPanel();
+}
+
+function updateFlatScreenScale() {
+  screen.scale.set((aspect / (16 / 9)) * FLAT_SCREEN_SCALE, FLAT_SCREEN_SCALE, 1);
 }
 
 function updateStereo() {
@@ -1262,8 +1278,7 @@ function anchorSceneToViewer() {
   if (forward.lengthSq() === 0) forward.set(0, 0, -1);
   const yaw = Math.atan2(-forward.x, -forward.z);
   const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-  const screenDistance = projection === 'cinema' ? 6 : 3.1;
-  screen.position.copy(position).addScaledVector(forward, screenDistance);
+  screen.position.copy(position).addScaledVector(forward, INITIAL_SCREEN_DISTANCE);
   screen.position.y -= 0.08;
   screen.quaternion.copy(facing);
   sphere.position.copy(position);
