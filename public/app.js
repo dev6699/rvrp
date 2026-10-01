@@ -18,15 +18,15 @@ const seekPreviewCanvas = document.querySelector('#seek-preview-frame');
 const seekPreviewContext = seekPreviewCanvas.getContext('2d');
 const seekPreviewVideo = document.createElement('video');
 const raycaster = new THREE.Raycaster();
-const grabViewRotation = new THREE.Quaternion();
-const grabViewForward = new THREE.Vector3();
-const grabViewRight = new THREE.Vector3();
+const grabViewPosition = new THREE.Vector3();
 const grabViewUp = new THREE.Vector3(0, 1, 0);
+const MIN_SCREEN_DISTANCE = 3.2;
+const MAX_SCREEN_DISTANCE = 20;
 const videos = [];
 const thumbnailCache = new Map();
 const thumbnailRequests = new Map();
 let activeVideo = null;
-let projection = '180';
+let projection = 'cinema';
 let stereo = 'mono';
 let texture;
 let screen;
@@ -39,6 +39,7 @@ let xrActive = false;
 let seeking = false;
 let aspect = 16 / 9;
 let cataloguePage = 0;
+let collectionVisible = false;
 let xrAnchored = false;
 let playbackNotice = '';
 let controlsVisible = false;
@@ -84,7 +85,7 @@ seekPreviewVideo.addEventListener('loadeddata', () => {
   if (vrSeekPreviewVisible) drawVrPanel();
 });
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x08090d);
+scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1000);
 camera.position.set(0, 1.62, 0);
 const renderer = new THREE.WebGLRenderer({
@@ -164,7 +165,7 @@ videoMaterial.onBeforeRender = (activeRenderer, _scene, activeCamera) => {
 
 const screenGeometry = new THREE.PlaneGeometry(3.5, 1.97);
 screen = new THREE.Mesh(screenGeometry, flatVideoMaterial);
-screen.position.set(0, 1.62, -3.1);
+screen.position.set(0, 1.62, -6);
 scene.add(screen);
 
 function createCinemaScreenGeometry() {
@@ -219,6 +220,7 @@ pointerDot.visible = false;
 scene.add(pointerDot);
 for (let index = 0; index < 2; index += 1) {
   const controller = renderer.xr.getController(index);
+  const gripController = renderer.xr.getControllerGrip(index);
   controller.addEventListener('select', onControllerSelect);
   controller.addEventListener('selectstart', () =>
     recordVrEvent(`${controller.userData.inputSource?.handedness || 'unknown'} trigger down`),
@@ -226,27 +228,30 @@ for (let index = 0; index < 2; index += 1) {
   controller.addEventListener('selectend', () =>
     recordVrEvent(`${controller.userData.inputSource?.handedness || 'unknown'} trigger up`),
   );
-  controller.addEventListener('squeezestart', (event) => {
-    recordVrEvent(`${controller.userData.inputSource?.handedness || 'unknown'} squeeze start`);
+  gripController.addEventListener('squeezestart', (event) => {
+    recordVrEvent(`${gripController.userData.inputSource?.handedness || 'unknown'} squeeze start`);
     onScreenGrabStart(event);
   });
-  controller.addEventListener('squeezeend', (event) => {
-    recordVrEvent(`${controller.userData.inputSource?.handedness || 'unknown'} squeeze end`);
+  gripController.addEventListener('squeezeend', (event) => {
+    recordVrEvent(`${gripController.userData.inputSource?.handedness || 'unknown'} squeeze end`);
     onScreenGrabEnd(event);
   });
   controller.addEventListener('connected', (event) => {
     controller.userData.inputSource = event.data;
+    gripController.userData.inputSource = event.data;
     const source = event.data;
     recordVrEvent(
       `input ${source.handedness} profile=${source.profiles.join(',')} map=${source.gamepad?.mapping || 'none'} buttons=${source.gamepad?.buttons.length ?? 0}`,
     );
   });
   controller.addEventListener('disconnected', (event) => {
-    onScreenGrabEnd(event);
+    if (screenGrab?.controller === gripController) onScreenGrabEnd({ target: gripController });
     recordVrEvent(`input ${controller.userData.inputSource?.handedness || 'unknown'} disconnected`);
     delete controller.userData.inputSource;
+    delete gripController.userData.inputSource;
   });
   scene.add(controller);
+  scene.add(gripController);
   const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)];
   const line = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(points),
@@ -511,8 +516,9 @@ function renderLibrary() {
 
 function playVideo(item) {
   activeVideo = item;
+  collectionVisible = false;
   playbackNotice = '';
-  projection = '180';
+  projection = 'cinema';
   stereo = 'mono';
   projectionInput.value = projection;
   stereoInput.value = stereo;
@@ -833,55 +839,47 @@ function onScreenGrabStart(event) {
 function beginScreenGrab(controller) {
   if (!renderer.xr.isPresenting || !activeVideo || !screen.visible || screenGrab) return;
   scene.updateMatrixWorld(true);
-  setControllerRay(controller);
-  // Grip is a dedicated screen-move action. Let it pass through the floating
-  // controls panel so the panel cannot prevent the screen from being grabbed.
-  if (!raycaster.intersectObject(screen, false).length) return;
+  renderer.xr.getCamera().getWorldPosition(grabViewPosition);
+  const startScreenOffset = screen.position.clone().sub(grabViewPosition);
+  const moveForward = new THREE.Vector3(startScreenOffset.x, 0, startScreenOffset.z);
+  if (moveForward.lengthSq() === 0) moveForward.set(0, 0, -1);
+  moveForward.normalize();
   screenGrab = {
     controller,
     startControllerPosition: controller.getWorldPosition(new THREE.Vector3()),
-    startScreenPosition: screen.position.clone(),
+    previousControllerPosition: controller.getWorldPosition(new THREE.Vector3()),
+    startViewerPosition: grabViewPosition.clone(),
+    startScreenOffset,
+    currentScreenOffset: new THREE.Vector3(),
+    horizontalRadius: Math.hypot(startScreenOffset.x, startScreenOffset.z),
+    horizontalTravel: 0,
+    verticalTravel: 0,
     startScreenRotation: screen.quaternion.clone(),
-    moveRight: new THREE.Vector3(1, 0, 0),
+    moveRight: new THREE.Vector3(-moveForward.z, 0, moveForward.x),
     moveUp: new THREE.Vector3(0, 1, 0),
-    moveForward: new THREE.Vector3(),
+    depthDirection: new THREE.Vector3(),
     currentControllerPosition: new THREE.Vector3(),
-    previousControllerPosition: new THREE.Vector3(),
-    frameDelta: new THREE.Vector3(),
+    controllerDelta: new THREE.Vector3(),
     handDelta: new THREE.Vector3(),
     depthOffset: 0,
-    appliedDepthOffset: 0,
     depthVelocity: 0,
     lastFrameTime: performance.now(),
   };
-  screenGrab.previousControllerPosition.copy(screenGrab.startControllerPosition);
-  // Freeze the movement plane at grab start. Recalculating it from the headset
-  // every frame makes head turns change the drag direction and can pull the
-  // screen around behind the viewer.
-  renderer.xr.getCamera().getWorldQuaternion(grabViewRotation);
-  screenGrab.moveRight.applyQuaternion(grabViewRotation);
-  screenGrab.moveRight.y = 0;
-  screenGrab.moveRight.normalize();
-  screenGrab.moveForward.set(0, 0, -1).applyQuaternion(grabViewRotation);
-  screenGrab.moveForward.y = 0;
-  screenGrab.moveForward.normalize();
+  // Drag along a tangent around the viewer so lateral movement does not alter
+  // the screen's distance. Hand movement toward or away from the viewer is ignored.
+  recordVrEvent(`screen grab start ${controller.userData.inputSource?.handedness || 'unknown'}`);
 }
 
 function onScreenGrabEnd(event) {
-  if (screenGrab?.controller === event.target) screenGrab = null;
+  if (screenGrab?.controller === event.target) {
+    recordVrEvent(
+      `screen grab end ${screenGrab.controller.userData.inputSource?.handedness || 'unknown'}`,
+    );
+    screenGrab = null;
+  }
 }
 
 function updateScreenGrab(now) {
-  if (screenGrab) {
-    const pressed = screenGrab.controller.userData.inputSource?.gamepad?.buttons?.[1]?.pressed;
-    if (pressed === false) screenGrab = null;
-  }
-  if (!screenGrab) {
-    const grippingController = controllers.find(
-      (controller) => controller.userData.inputSource?.gamepad?.buttons?.[1]?.pressed,
-    );
-    if (grippingController) beginScreenGrab(grippingController);
-  }
   if (!screenGrab) return;
   const grab = screenGrab;
   grab.controller.getWorldPosition(grab.currentControllerPosition);
@@ -893,30 +891,44 @@ function updateScreenGrab(now) {
     Number.isFinite(thumbstickY) && Math.abs(thumbstickY) > 0.18
       ? (-Math.sign(thumbstickY) * (Math.abs(thumbstickY) - 0.18)) / 0.82
       : 0;
-  if (stick) grab.depthVelocity += stick * 4.5 * elapsed;
-  else grab.depthVelocity *= Math.exp(-4.5 * elapsed);
-  grab.depthVelocity = THREE.MathUtils.clamp(grab.depthVelocity, -2.4, 2.4);
+  if (stick) grab.depthVelocity += stick * 12 * elapsed;
+  else grab.depthVelocity *= Math.exp(-6 * elapsed);
+  grab.depthVelocity = THREE.MathUtils.clamp(grab.depthVelocity, -8, 8);
   grab.depthOffset = THREE.MathUtils.clamp(
     grab.depthOffset + grab.depthVelocity * elapsed,
-    -2.2,
-    2.2,
+    MIN_SCREEN_DISTANCE - grab.horizontalRadius,
+    MAX_SCREEN_DISTANCE - grab.horizontalRadius,
   );
-  if (Math.abs(grab.depthOffset) >= 2.2) grab.depthVelocity = 0;
+  if (
+    grab.depthOffset <= MIN_SCREEN_DISTANCE - grab.horizontalRadius ||
+    grab.depthOffset >= MAX_SCREEN_DISTANCE - grab.horizontalRadius
+  ) {
+    grab.depthVelocity = 0;
+  }
   grab.lastFrameTime = now;
-  const handDelta = grab.frameDelta.subVectors(
-    grab.currentControllerPosition,
-    grab.previousControllerPosition,
-  );
-  const horizontal = handDelta.dot(grab.moveRight) * 4;
-  const vertical = handDelta.y * 4;
-  grab.handDelta.subVectors(grab.currentControllerPosition, grab.startControllerPosition);
+  grab.controllerDelta.subVectors(grab.currentControllerPosition, grab.previousControllerPosition);
   grab.previousControllerPosition.copy(grab.currentControllerPosition);
+  grab.horizontalTravel += grab.controllerDelta.dot(grab.moveRight) * 20;
+  grab.verticalTravel += grab.controllerDelta.dot(grab.moveUp) * 20;
+  grab.handDelta.subVectors(grab.currentControllerPosition, grab.startControllerPosition);
+  const yawOffset = -grab.horizontalTravel / Math.max(grab.horizontalRadius, 0.1);
+  grab.currentScreenOffset.copy(grab.startScreenOffset).applyAxisAngle(grab.moveUp, yawOffset);
+  grab.depthDirection.set(grab.currentScreenOffset.x, 0, grab.currentScreenOffset.z).normalize();
   screen.position
-    .addScaledVector(grab.moveRight, horizontal)
-    .addScaledVector(grab.moveUp, vertical)
-    .addScaledVector(grab.moveForward, grab.depthOffset - grab.appliedDepthOffset);
-  grab.appliedDepthOffset = grab.depthOffset;
-  screen.quaternion.copy(grab.startScreenRotation);
+    .copy(grab.startViewerPosition)
+    .add(grab.currentScreenOffset)
+    .addScaledVector(grab.depthDirection, grab.depthOffset)
+    .addScaledVector(grab.moveUp, grab.verticalTravel);
+  if (projection === 'cinema') {
+    renderer.xr.getCamera().getWorldPosition(grabViewPosition);
+    const yaw = Math.atan2(
+      grabViewPosition.x - screen.position.x,
+      grabViewPosition.z - screen.position.z,
+    );
+    screen.quaternion.setFromAxisAngle(grabViewUp, yaw);
+  } else {
+    screen.quaternion.copy(grab.startScreenRotation);
+  }
 }
 
 function updateControllerButtons() {
@@ -950,8 +962,10 @@ function updateControllerButtons() {
 
 function handleVrPanelAction(action, value) {
   if (action === 'exit') renderer.xr.getSession()?.end();
-  else if (action === 'hide-collection') setVrControlsVisible(false);
-  else if (action === 'toggle-controls') {
+  else if (action === 'hide-collection') {
+    collectionVisible = false;
+    setVrControlsVisible(Boolean(activeVideo));
+  } else if (action === 'toggle-controls') {
     setVrControlsVisible(!panelMesh.visible);
   } else if (action === 'catalogue-prev') cataloguePage = Math.max(0, cataloguePage - 1);
   else if (action === 'catalogue-next')
@@ -979,7 +993,7 @@ function handleVrPanelAction(action, value) {
     recordVrEvent('player center');
     anchorSceneToViewer();
   } else if (action === 'library') {
-    activeVideo = null;
+    collectionVisible = true;
     if (renderer.xr.isPresenting) {
       controlsVisible = true;
       panelMesh.visible = true;
@@ -1002,21 +1016,22 @@ function drawVrPanel() {
   roundedRect(ctx, 4, 4, width - 8, height - 8, 32);
   ctx.fill();
   panelHitboxes = [];
+  const showingCollection = !activeVideo || collectionVisible;
   ctx.fillStyle = '#a895f4';
   ctx.font = '500 22px Arial, sans-serif';
-  ctx.fillText(activeVideo ? 'NOW PLAYING' : 'YOUR COLLECTION', 40, 48);
+  ctx.fillText(showingCollection ? 'YOUR COLLECTION' : 'NOW PLAYING', 40, 48);
   ctx.fillStyle = '#f2effa';
   ctx.font = '600 27px Arial, sans-serif';
   fitText(
     ctx,
-    activeVideo?.name || 'Choose a video',
-    activeVideo ? 218 : 40,
-    activeVideo ? 49 : 91,
-    activeVideo ? width - 430 : width - 80,
+    showingCollection ? 'Choose a video' : activeVideo.name,
+    showingCollection ? 40 : 218,
+    showingCollection ? 91 : 49,
+    showingCollection ? width - 80 : width - 430,
   );
   drawButton(ctx, width - 176, 22, 136, 44, 'Exit VR', 'exit');
 
-  if (!activeVideo) {
+  if (showingCollection) {
     drawButton(ctx, width - 350, 22, 150, 44, 'Hide List', 'hide-collection');
     const pageCount = Math.max(1, Math.ceil(videos.length / 6));
     const visible = videos.slice(cataloguePage * 6, (cataloguePage + 1) * 6);
@@ -1247,7 +1262,8 @@ function anchorSceneToViewer() {
   if (forward.lengthSq() === 0) forward.set(0, 0, -1);
   const yaw = Math.atan2(-forward.x, -forward.z);
   const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-  screen.position.copy(position).addScaledVector(forward, 3.1);
+  const screenDistance = projection === 'cinema' ? 6 : 3.1;
+  screen.position.copy(position).addScaledVector(forward, screenDistance);
   screen.position.y -= 0.08;
   screen.quaternion.copy(facing);
   sphere.position.copy(position);
@@ -1333,6 +1349,7 @@ function updateControllerRays() {
 }
 
 function setVrControlsVisible(visible, videoPoint) {
+  if (visible && activeVideo) collectionVisible = false;
   controlsVisible = visible;
   panelMesh.visible = visible;
   if (visible) {

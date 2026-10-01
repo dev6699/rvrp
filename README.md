@@ -70,7 +70,7 @@ the video to 2560×1440 with `-vf scale=2560:-2`.
    library, or enter VR without selecting one and choose it from the floating collection.
 2. Choose the projection and stereo layout in the player controls. Use **Flat** or **Cinema** for 2D
    video, or **180°** and **360°** for immersive video. Choose **Mono**, **Side by side**, or **Top
-   / bottom** to match the video's layout. Playback defaults to 180° and Mono.
+   / bottom** to match the video's layout. Playback defaults to cinema and Mono.
 3. Select **Enter VR**. If you entered VR before choosing a video, point a controller at a library
    item and press the trigger to play it.
 4. During playback, point at the video and press the trigger to show or hide the VR controls. Use

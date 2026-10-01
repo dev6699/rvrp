@@ -26,7 +26,16 @@ app.get('/api/videos', async (_req, res, next) => {
     await fs.promises.mkdir(videoRoot, { recursive: true });
     const videos = [];
     await scan(videoRoot, '', videos);
-    videos.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    videos.sort((a, b) => {
+      const folderOrder = Number(!a.folder) - Number(!b.folder);
+      if (folderOrder !== 0) return folderOrder;
+      const folderNameOrder = a.folder.localeCompare(b.folder, undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      });
+      if (folderNameOrder !== 0) return folderNameOrder;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
     res.json({ videos });
   } catch (error) {
     next(error);
